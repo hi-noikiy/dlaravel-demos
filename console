@@ -1,0 +1,449 @@
+#!/bin/bash
+uid=`whoami|id -u`
+if [ ${uid} -eq 0 ]; then
+    echo "Don't run D-Laravel as root!"
+    exit;
+fi
+plateform=`uname -s`
+winpty=""
+
+#取得scripts的執行路徑
+base_path="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+#檢測是否有環境設定檔
+if [ -f "${base_path}/.env" ]; then
+source ${base_path}/.env
+fi
+
+#is windows
+which winpty >/dev/null 2>&1
+if [ $? -eq 0 ]; then
+    winpty=`which winpty`
+    hosts_file='/c/Windows/system32/drivers/etc/hosts'
+fi
+
+#功能
+source ${base_path}/scripts/functions
+
+
+#建立sites資料夾，如果不存在
+if [ ! -d "${base_path}/sites/" ]; then
+   mkdir -p "${base_path}/sites/"
+fi
+
+#顯示目前版本
+if [ "${1}" == "version" ]; then
+cat ${base_path}/etc/dlaravel-release
+exit;
+fi
+
+if [ "${1}" == "node" ]; then
+    ${winpty} docker run --rm -v ${base_path}/sites:/sites -w /sites -ti node bash
+exit;
+fi
+
+if [ "${1}" == "build" ]; then
+  echo "${winpty} docker-compose -f ${base_path}/docker-compose-build.yml up --build -d"
+  ${winpty} docker-compose -f ${base_path}/docker-compose-build.yml up --build -d
+exit;
+fi
+
+#調整Container DLaravel使用者ID
+if [ "${1}" == "chowner" ]; then
+
+	    if [ ${plateform} == 'Linux' ]; then
+             dlaravel_gid=`whoami|id -g`
+             dlaravel_uid=`whoami|id -u`
+              
+             ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec php usermod -u ${dlaravel_uid} dlaravel
+             ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec php groupmod -g ${dlaravel_gid} dlaravel
+             ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec php chown -R ${dlaravel_uid} /home/dlaravel
+
+             echo "You have to commit your php fpm image, and restart container."
+	     echo "Example: docker commit 67306ecd0879 deviny/fpm:7.1.9"
+	     echo "./console restart"
+            fi
+exit;
+fi
+
+#開發測試中Beta
+if [ "${1}" == "alias" ] && [ ${#} -eq 1 ]; then
+calias="alias c=${base_path}/console"
+echo ${calias}
+exit;
+fi
+#顯示artisan的別名
+if [ "${1}" == "alias" ] && [ ${#} -gt 1 ] && [ ${2} == "a" ]; then
+echo "To run artisan command from host, please add following command to .bash_profile or .zshrc:"
+calias='alias a="../../artisan.sh"'
+echo ${calias}
+exit;
+fi
+
+#顯示composer的別名
+if [ "${1}" == "alias" ] && [ ${#} -gt 1 ] && [ ${2} == "ce" ]; then
+echo "To run composer command from host, please add following command to .bash_profile or .zshrc:"
+calias='alias ce="../../composer.sh"'
+echo ${calias}
+exit;
+fi
+
+
+#移除停址的container
+if [ "${1}" == "rm" ]; then
+    ${winpty} docker-compose -f ${base_path}/docker-compose.yml rm
+    exit;
+fi
+
+# 停止並移除所有啟動中及停用的container
+if [ "${1}" == "clear" ]; then
+    echo "Would You like to stop / remove all Docker containers?(y/n)"
+    read  ans
+    if [ ${ans} = 'n' ]; then
+        exit
+    else 
+        #檢測是否有container啟動中
+         docker ps|grep -q Up
+        if [ $? -eq 0 ]; then
+         docker stop $(docker ps --format '{{.Names}}')
+        fi
+        if [ ! -z "$(docker ps -a -q)" ]; then
+         docker rm $(docker ps -a -q)
+        fi
+    fi
+    exit;
+fi
+
+#顯示docker-compose的設定檔連結
+if [ "${1}" == "link" ]; then
+    console_link
+    exit;
+fi
+
+#下載images
+if [ "${1}" == "pull" ]; then
+    console_pull    
+    exit;
+fi
+
+#列出目前的php可用的extension(beta)
+if [ "${1}" == "ext" ]; then
+docker-compose -f ${base_path}/docker-compose.yml exec php ls `docker-compose exec php php -i|grep extension_dir|head -n 1|cut -d\> -f 2|cut -d= -f1` 
+exit;
+fi
+
+#變更模式, web:80, db:127.0.0.1:3306
+if [ "${1}" == "normal" ]; then
+    #先嚐試停止
+    console_down_silent 
+    echo "docker-compose setting file changed."
+    echo "HOST DB: listen on 127.0.0.1:3306."
+    echo "HOST WEB: listen on port 80."
+    ln -vsf ${base_path}/docker-compose-normal.yml ${base_path}/docker-compose.yml
+    console_up
+    exit;
+fi
+
+#隨機
+if [ "${1}" == "random" ]; then
+    #先嚐試停止
+    console_down_silent 
+
+    echo "docker-compose setting file changed."
+    echo "HOST DB: listen on random port."
+    echo "HOST WEB: listen on random port."
+    ln -vsf ${base_path}/docker-compose-random.yml ${base_path}/docker-compose.yml
+    console_up
+    exit;
+fi
+
+#Custom Config
+if [ "${1}" == "custom" ]; then
+    #檢測docker-compose-custom.yml是否存在
+    if [ -e "${base_path}/docker-compose-custom.yml" ]; then
+        console_down_silent 
+        ln -vsf ${base_path}/docker-compose-custom.yml ${base_path}/docker-compose.yml 
+        console_up
+    else
+        #如果docker-compose-custom.yml不存在，使用normal為範本
+        cp ${base_path}/docker-compose-normal.yml ${base_path}/docker-compose-custom.yml
+        ln -vsf ${base_path}/docker-compose-custom.yml ${base_path}/docker-compose.yml 
+        echo "docker-compose-custom.yml is created."
+        console_up
+    fi 
+    exit;
+fi
+
+
+#停止docker-compose
+if [ "${1}" == "down" ]; then
+    console_down
+    exit
+fi
+
+#重啟
+if [ "${1}" == "restart" ] && [ ${#} -eq 1 ]; then
+    console_down
+    console_up
+    exit;
+fi
+
+#重啟特定服務
+if [ "${1}" == "restart" ] && [ ${#} -gt 1 ]; then
+    #web綁定php-fpm了，所以需重啟php
+    if [ "${2}" == "web" ]; then
+        console_restart restart web
+        console_restart restart php
+       else
+        console_restart ${@}
+    fi
+    exit;
+fi
+#supervisor簡化指令
+if [ "${1}" == "supervisor" ] && [ ${#} -gt 1 ]; then
+    shift
+    ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec php /etc/init.d/supervisor ${@}
+    exit
+fi
+
+#停止特定服務
+if [ "${1}" == "up" ] && [ ${#} -gt 1 ]; then
+    if [ "${2}" == "web" ]; then
+        console_up_service web
+        console_up_service php
+       else
+        shift
+        console_up_service ${@}
+    fi
+    exit;
+fi
+
+if [ "${1}" == "up" ] && [ ${#} -eq 1 ]; then
+    console_up
+    exit;
+fi
+
+#docker-compose 的top
+if [ "${1}" == "top" ] && [ ${#} -eq 1 ]; then
+    console_top
+    exit;
+fi
+
+if [ "${1}" == "top" ] && [ ${#} -gt 1 ]; then
+    #web綁定php-fpm了，所以需重啟php
+    if [ "${2}" == "web" ]; then
+        console_top_service web
+        console_top_service php
+       else
+        shift
+        console_top_service ${@}
+    fi
+    exit;
+fi
+
+#docker-compose exec
+if [ "${1}" == "exec" ]; then
+    console_exec ${@}
+    exit;
+fi
+
+#進資料庫
+if [ "${1}" == "mysql" ]; then
+
+    ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db env|grep MYSQL_ROOT_PASSWORD >/dev/null 2>&1
+    if [  $? -gt 0  ]; then
+        ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db mysql
+        else
+        echo "Your MySQL root password."
+        ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db mysql -uroot -p
+    fi
+exit;
+fi
+
+#啟動時檢測網頁資訊
+if [ "${1}" == "info" ]; then
+    readlink -n ${base_path}/docker-compose.yml
+    echo ""
+    echo "DB:"
+    ${base_path}/scripts/db-ports
+    echo "Web:"
+    ${base_path}/scripts/web-ports
+    exit;
+fi
+
+#執行ps
+if [ "${1}" == "ps" ]; then
+    console_ps
+    exit
+fi
+
+#使用self-signed的憑證 
+if [ "${1}" == "secure" ]; then
+#檢測sites內的資料夾數量
+projectNum=`ls ${base_path}/sites/|wc -l`
+if [ ${projectNum} -eq 0 ]; then
+    echo "No Projects are found, you can create one by following command."
+    echo "For example as below:"
+    echo "./create [project name]"
+    echo "or";
+    echo "To manually create new default project:"
+    echo "mkdir -p sites/default/public;touch sites/default/public/index.php"
+    exit;
+fi
+#一律使用sample蓋掉預設的設定檔
+cp ${base_path}/etc/default-ssl.sample ${base_path}/etc/default-ssl.conf
+
+
+#檢測project是否有ssl的資料夾
+if [ ! -d "${base_path}/etc/ssl" ]; then
+    mkdir -p "${base_path}/etc/ssl"
+fi
+
+#產生設定檔 
+cp ${base_path}/etc/v3.sample ${base_path}/etc/v3.ext
+for server_name in $(ls -d ${base_path}/sites/*|rev|cut -d/ -f1|rev); do 
+    dns_index=$(($dns_index+1))
+    echo "DNS.${dns_index}=www.${server_name}.test" >> ${base_path}/etc/v3.ext
+    dns_index=$(($dns_index+1))
+    echo "DNS.${dns_index}=${server_name}.test" >> ${base_path}/etc/v3.ext
+done
+
+#MacOS時，移除所有已存在的
+if [ ${plateform} == 'Darwin' ]; then
+security find-certificate -c "dlaravel.test" -a -Z | \
+  sudo awk '/SHA-1/{system("security delete-certificate -Z "$NF)}'
+fi
+
+openssl req \
+-new -newkey rsa:2048 -sha256 \
+-days 3650 -nodes -x509 -keyout ${base_path}/etc/ssl/cert.key -out ${base_path}/etc/ssl/cert.crt \
+-config ${base_path}/etc/v3.ext -extensions 'v3_req'
+
+#不管有沒有先刪一次
+#sudo security delete-certificate -c "${2}.test" -t /Library/Keychains/System.keychain
+
+if [ ${plateform} == 'Darwin' ]; then
+sudo security add-trusted-cert -d -r trustRoot -k "/Library/Keychains/System.keychain" ${base_path}/etc/ssl/cert.crt
+fi
+
+docker-compose -f ${base_path}/docker-compose.yml ps|grep -q php-fpm
+if [ $? -eq 0 ]; then
+    source ${base_path}/scripts/nginx-reload
+fi
+exit
+fi
+
+#顯示log
+if [ "${1}" == "logs" ]; then
+    console_logs ${@}
+exit
+fi
+
+#重新載入nginx設定
+if [ "${1}" == "reload" ]; then
+    echo "${winpty} docker-compose -f ${base_path}/docker-compose.yml exec web nginx -s reload"
+    ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec web nginx -s reload
+exit
+fi
+function help {
+    echo "usage: ${0} [<option>]"
+    echo ""
+    echo "options:"
+    if [ "${LANG:0:2}" = "zh" ]; then
+
+    echo "  up : 建立並啟動container。"
+    echo "  down : 停止並移除container。"
+    echo "  restart : 停止再啟動down and up，不明怪問題時應該有用"
+    echo "  ps : Lists Contaienrs. (docker-compose -f ${base_path}/docker-compose.yml ps)"
+    echo "  alias : 顯示consle的別名指令"
+    echo "  logs : container service的log, 用Ctrl+C中斷"
+    echo "  info : 列出web及db在host的連接埠。"
+    echo "  mysql : 快速進入mysql"
+    echo "  link : 目前docker-compose 連結的設定檔"
+    echo "  secure: 加入https設定檔"
+    echo "  normal : 變更docker-compose連結，讓docker使用標準連結埠，80:443:3306"
+    echo "  random : 變更docker-compose連結，讓docker啟用隨機的連接埠，可用./console ps查看"
+    echo "  custom : 變更docker-compose連結，產生或使用自定的設定檔"
+    echo "  exec : 執行php container內的命令，例如: ./console exec php php -v"
+    echo "  reload : 重載nginx的設定."
+    echo "  node: 會執行node容器，並且掛載/sites資料夾。"
+    echo "  ext: 列出目前fpm可用的php exteinsions，自訂檔名新增.ini檔到etc/php下即可啟用哦。"
+    echo "  chowner: D-Laravel的使用者uid及gid在容器內預設為1000，在linux環境中，您可能需要調整dlaravel的uid與gid與您的目前使用者相同"
+    echo "  clear : 移除所有docker ps -a 所有停止的Container!!包含您自己過去創建的所有停止的container哦!!"
+    echo "  ./console : 進入php container內"
+    echo "  version : 顯示目前的版本."
+        else
+    echo "  up : Run containers in the background."
+    echo "  down : Stop and remove containers, networks."
+    echo "  restart : Restart services."
+    echo "  ps : Lists Contaienrs. (docker-compose -f ${base_path}/docker-compose.yml ps)"
+    echo "  alias : Display console's alias setting."
+    echo "  logs : service's log, ctrl+c to stop."
+    echo "  info : list webs and port of database."
+    echo "  mysql : Enter mysql interactive mode."
+    echo "  link : Display current link of docker-compose file."
+    echo "  secure: Add self-signed ceftifiecate, to enable https support."
+    echo "  normal : change docker-compose.yal link to docker-compose-normal.yml, for using ports 80:443:3306"
+    echo "  random : change docker-compose.yml link to docker-compose-random.yml，for using random ports，you can check issue ./console ps"
+    echo "  custom : change docker-compose.yml link link to docker-compose-custom.yml， for custom purpose."
+    echo "  exec : exec php container's command， for example: ./console exec php php -v"
+    echo "  reload : nginx reload config file."
+    echo "  node : run node container, and mount /sites folder."
+    echo "  ext: list php extensions."
+    echo "  chowner: D-Laravel users uid and gid are 1000 in container, in the linux environment, you may need to adjust D-Laravel uid and gid with your current user the same."
+    echo "  clear : Remove all your containers that listed by docker ps -a !!"
+    echo "  ./console : Enter php container."
+    echo "  version : Display current version."
+    echo ""
+    echo "I'm not native speaker in English, please feel free to send me a PR to fix the help."
+
+    fi
+}
+#說明
+if [ "${1}" == "help" ]; then
+    help
+    exit;
+fi
+
+if [ "${1}" == "-h" ]; then
+    help
+    exit;
+fi
+
+if [ "${1}" == "--help" ]; then
+    help
+    exit;
+fi
+
+if [ "${1}" == "" ]; then
+
+        #檢測是否執行
+        ${winpty} docker-compose -f ${base_path}/docker-compose.yml ps |grep -q web_1
+        if [ $? -eq 1 ]; then
+        #啟動container，如果未啟動
+        console_up
+
+        #設定timezone
+        #${winpty} docker-compose exec web /bin/bash -c 'cd /etc/;ln -sf /usr/share/zoneinfo/Asia/Taipei localtime;dpkg-reconfigure -f noninteractive tzdata'
+
+        #確保ubuntu環境能順利寫入資料
+        #${winpty} docker-compose -f ${base_path}/docker-compose.yml exec php chown dlaravel /var/www/html
+        #確保dlaravel有權限寫入/var/log，例如xdebug.log
+        #${winpty} docker-compose -f ${base_path}/docker-compose.yml exec php chown dlaravel /var/log
+        fi
+
+        #${winpty} docker-compose -f ${base_path}/docker-compose.yml exec php sudo -u dlaravel bash 
+        if [ -z "${DOCKER_SERVICES}" ]; then
+            echo "${winpty} docker-compose  -f ${base_path}/docker-compose.yml exec -u dlaravel php bash"
+            ${winpty} docker-compose  -f ${base_path}/docker-compose.yml exec -u dlaravel php bash  
+        else
+            array_service
+            echo "${winpty} docker-compose  -p $(basename ${base_path}) ${CONSOLE_CMD} exec -u dlaravel php bash"
+            ${winpty} docker-compose  -p $(basename ${base_path}) ${CONSOLE_CMD} exec -u dlaravel php bash
+        fi
+
+    else
+    echo "${1} - Parameter not found"
+    help
+fi
+exit

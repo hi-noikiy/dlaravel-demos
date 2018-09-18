@@ -1,0 +1,18 @@
+#phpmyadmin官方image
+version: '3.6'
+services:
+ phpmyadmin:
+  image: phpmyadmin/phpmyadmin
+  #移除本機127.0.0.1，將讓外面可以直接存取哦
+  #請勿隨意調整為8080:80
+  #D-Laravel的root預設是不需密碼的
+  ports:
+      - "127.0.0.1:8080:80"
+  #volumes:
+   #- ./etc/phpmyadmin/config.user.inc.php:/etc/phpmyadmin/config.user.inc.php
+
+  networks:
+    - dlaravel_net
+
+networks:
+    dlaravel_net:

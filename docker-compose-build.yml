@@ -1,0 +1,69 @@
+###################################################3
+# 此檔案有版本控制，參考用
+# 透過-f參數，指定yaml檔，啟動container
+# docker-compose -f docker-compose-build.yml up -d
+# 如果image已存在時，需加上--build
+# docker-compose -f docker-compose-build.yml up --build -d
+###################################################3
+version: '3.6'
+services:
+### 網頁伺服器的container ##################################
+ web:
+  image: nginx
+  dns: 8.8.8.8
+  ports:
+    # 使用隨機的port 80
+    - "80:80"
+    - "443:443"
+  volumes:
+  - ./sites:/var/www/html
+  - ./etc:/etc/nginx/conf.d
+  - ./var/logs/web:/var/log/nginx
+  hostname: web
+  networks:
+    - dlaravel_net
+  
+### PHP-FPM container ##################################
+ php:
+  image: mydlaravelfpm
+  build:
+     context: ./dockerfiles/fpm/${FPM_VERSION:-7.2}
+  network_mode: "service:web"
+  volumes:
+  - ./etc/php:/usr/local/etc/php/conf.d
+  - ./sites:/var/www/html
+  - ./etc/php-fpm.d/www.conf:/usr/local/etc/php-fpm.d/www.conf
+  ###建立composer cache###
+  - ./etc/cache:/home/dlaravel/.composer/cache
+  #- ./var/logs/php:/var/log
+  #- ./etc/supervisor:/etc/supervisor/conf.d
+  #- ./var/logs/supervisor:/var/log/supervisor
+  environment:
+   - TZ=Asia/Taipei
+  #- PHP_IDE_CONFIG=serverName=dlaravel
+  #- XDEBUG_CONFIG="remote_host=???? profiler_enable=1"
+  #建立bash_aliases在etc下，可用來自訂dlaravel使用者的環境變數
+  #- ./etc/bash_aliases:/home/dlaravel/.bash_aliases
+
+### 資料庫 container ##################################
+ db:
+  image: mysql:5.7.19
+  hostname: db
+  ports:
+    - "127.0.0.1:3306:3306"
+  volumes:
+    - ./etc/mysql/my.cnf:/etc/mysql/my.cnf
+    - ./data:/var/lib/mysql
+  environment:
+   #- MYSQL_DATABASE=homestead
+   #- MYSQL_USER=homestead
+   #- MYSQL_PASSWORD=secret
+   #- MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD-secret}
+   - MYSQL_ALLOW_EMPTY_PASSWORD= "yes"
+   - TZ=Asia/Taipei
+  networks:
+    - dlaravel_net
+
+######top-level netowks key#######
+networks:
+    dlaravel_net:

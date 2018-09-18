@@ -1,0 +1,301 @@
+#!/bin/bash
+source ./scripts/checker
+
+#檢測是否有環境設定檔
+#default由container內的laravel install安裝Laravel
+export LARAVEL_INSTALLER='container'
+if [ -f "${base_path}/.env" ]; then
+  source ${base_path}/.env
+  else
+  base_path="$( cd "$(dirname "$0")" ; pwd -P )" 
+fi
+
+#is windows
+which winpty >/dev/null 2>&1
+if [ $? -eq 0 ]; then
+    winpty=`which winpty`
+    hosts_file='/c/Windows/system32/drivers/etc/hosts'
+fi
+
+#array_service
+function array_service {
+        array_service=(${DOCKER_SERVICES})
+        CONSOLE_CMD=""
+        for i in "${array_service[@]}"
+        do
+         : 
+        CONSOLE_CMD+="-f ${base_path}/${i} "
+        done
+}
+
+#共用功能
+source ./scripts/functions
+
+function is_running {
+#檢測是否執行
+docker-compose  -f docker-compose.yml ps |grep ${containerName}_web_1|grep -q Up
+if [ $? -eq 1 ]; then
+    echo "${containerName}_php_1 is not running."
+    echo "Would you like to create the project and run docker-compose up (y/n):"
+    read  ans
+    if [ ${ans} = 'n' ]; then
+       exit
+    else 
+        console_up
+        if [ ${?} -ne 0 ]; then
+            #啟動失敗，停止動作
+            exit;
+        fi
+    fi
+fi
+}
+
+function help {
+    echo "usage: ${0} [<option>] [Project name]"
+    echo ""
+    echo "Example"
+    echo "./create [project name]: Create a new laravel proejct into sites folder."
+    echo ""
+    echo "options:"
+    echo "  --help : help"
+    echo "  --host [project name]: Adding [project name].test to /etc/hosts, But don't want to install laravel framework."
+    echo "  --db [project name]: Create a database name and user name that is the same as project name."
+}
+#說明
+if [ "${1}" == "--help" ]; then
+    help
+    exit;
+fi
+
+#未指定專案名稱
+if [ $# -lt 1 ]; then
+    help
+    exit;
+fi
+
+#check winpty
+function dlaravelconfig {
+    if [ ${hosts_file} == '/etc/hosts' ]; then
+        #檢測hosts檔是否已新增 
+        sudo cat ${hosts_file}|tr -s " "|grep "127.0.0.1 ${@}.test"
+        #找不到時，就新增至Hosts
+        if [ $? -eq 1 ]; then
+            echo "127.0.0.1 ${@}.test" |sudo tee -a ${hosts_file}
+        fi
+        
+        sudo cat ${hosts_file}|tr -s " "|grep "127.0.0.1 www.${@}.test"
+        if [ $? -eq 1 ]; then
+            echo "127.0.0.1 www.${@}.test" |sudo tee -a ${hosts_file}
+        fi
+        ${winpty} docker-compose exec -u dlaravel php sed -i "s/DB_HOST=127.0.0.1/DB_HOST=db/" /var/www/html/${@}/.env
+        ${winpty} docker-compose exec -u dlaravel php sed -i "s/DB_DATABASE=homestead/DB_DATABASE=${@}/" /var/www/html/${@}/.env
+        ${winpty} docker-compose exec -u dlaravel php sed -i "s/DB_USERNAME=homestead/DB_USERNAME=${@}/" /var/www/html/${@}/.env
+        ${winpty} docker-compose exec -u dlaravel php sed -i "s/DB_PASSWORD=secret/DB_PASSWORD=${@}/" /var/www/html/${@}/.env
+        
+        #docker-compose exec php /root/.composer/vendor/bin/laravel new ${1}
+        #調整資料庫連線到db的container
+
+    else
+        echo "Win"
+      #for windows 10
+      cat /c/Windows/System32/drivers/etc/hosts|grep "127.0.0.1 ${@}.test"
+      if [ $? -eq 1 ]; then
+       echo 127.0.0.1 ${@}.test >> /c/Windows/System32/drivers/etc/hosts  
+      fi
+
+      sed -i "s/DB_HOST=127.0.0.1/DB_HOST=db/" sites/${@}/.env
+      sed -i "s/DB_DATABASE=homestead/DB_DATABASE=${@}/" sites/${@}/.env
+      sed -i "s/DB_USERNAME=homestead/DB_USERNAME=${@}/" sites/${@}/.env
+      sed -i "s/DB_PASSWORD=homestead/DB_PASSWORD=${@}/" sites/${@}/.env
+
+    fi
+
+    #檢測container內是否有給MYSQL_ROOT_PASSWORD
+    ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db env|grep MYSQL_ROOT_PASSWORD >/dev/null 2>&1
+
+    #RTOO沒設定密碼
+    if [ $? -gt 0 ]; then
+
+        #建資料庫
+        ${winpty} docker-compose exec db mysql -e "CREATE DATABASE IF NOT EXISTS \`${1}\`"
+        #建立使用者
+        ${winpty} docker-compose exec db mysql -e "CREATE USER IF NOT EXISTS \"${1}\""
+        #設定使用者帳密同Project名稱
+        #${winpty} docker-compose exec db mysql -e "SET PASSWORD FOR \`${1}\`=\"${1}\""
+        ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db mysql -e "ALTER USER \"${1}\" IDENTIFIED WITH mysql_native_password BY \"${1}\""
+        #授權使用者
+        ${winpty} docker-compose exec db mysql -e "GRANT ALL ON \`${1}\`.* TO \"${1}\""
+        #更新container權限
+        ${winpty} docker-compose exec db mysql -e "FLUSH PRIVILEGES"
+        else
+        #建資料庫
+        ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db sh -c 'mysql -e "CREATE DATABASE IF NOT EXISTS \`'${1}'\`" -uroot -p"$MYSQL_ROOT_PASSWORD"' >/dev/null 2>&1
+        #建立使用者
+        ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db sh -c 'mysql -e "CREATE USER IF NOT EXISTS \"'${1}'\"" -uroot -p"$MYSQL_ROOT_PASSWORD"' >/dev/null 2>&1
+        #設定使用者帳密同Project名稱
+        #${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db sh -c 'mysql -e "SET PASSWORD FOR \`'${1}'\`=\"'${1}'\"" -uroot -p"$MYSQL_ROOT_PASSWORD"' >/dev/null 2>&1  
+        #${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db mysql -uroot -p${MYSQL_ROOT_PASSWORD} -e "ALTER USER \"${1}\" IDENTIFIED WITH mysql_native_password BY \"${1}\""
+        ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db sh -c 'mysql -uroot -p${MYSQL_ROOT_PASSWORD} -e "ALTER USER \"'${1}'\" IDENTIFIED WITH mysql_native_password BY \"'${1}'\""'
+        #授權使用者
+        ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db sh -c 'mysql -e "GRANT ALL ON \`'${1}'\`.* TO \"'${1}'\"" -uroot -p"$MYSQL_ROOT_PASSWORD"' >/dev/null 2>&1
+        #更新container權限
+        ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db sh -c 'mysql -e "FLUSH PRIVILEGES" -uroot -p"$MYSQL_ROOT_PASSWORD"' >/dev/null 2>&1
+
+    fi
+
+
+
+
+#拷貝default.sample修改
+#docker-compose exec web cp /etc/nginx/conf.d/default.sample /etc/nginx/conf.d/${1}.conf
+
+#變更內容
+#docker-compose exec web sed -i "s/laravel/${1}/g" /etc/nginx/conf.d/${1}.conf
+#docker-compose exec web sed -i "s/localhost/${1}.test/" /etc/nginx/conf.d/${1}.conf
+
+source ./scripts/nginx-reload
+web_port=`docker inspect --format='{{(index (index .NetworkSettings.Ports "80/tcp") 0).HostPort}}'  ${containerName}_web_1`
+#echo " http://${1}.test:${web_port}"
+
+        if [ ${web_port} == 80 ]; then
+        echo -n http://;echo ${1}.test|cut -d/ -f 2; 
+        else
+        echo -n http://;echo ${1}.test:${web_port}|cut -d/ -f 2; 
+        fi
+
+}
+
+#由container建立Laravel
+function dlaravel_new {
+    if [ ${hosts_file} == '/etc/hosts' ]; then
+
+        #確保ubuntu環境能順利寫入資料
+	#${winpty} docker-compose exec php chown dlaravel /var/www/html
+        #確保dlaravel有權限寫入/var/log，例如xdebug.log
+	#${winpty} docker-compose exec php chown dlaravel /var/log
+        #由container進行Laravel安裝
+        if [ ${LARAVEL_INSTALLER} == 'container' ]; then
+          echo "Run laravel installer in container: laravel new ${1}"
+          docker exec -ti ${containerName}_php_1 sudo -u dlaravel /home/dlaravel/.composer/vendor/bin/laravel new ${1}
+        fi
+        #由主機端的Laravel Installer安裝
+        if [ ${LARAVEL_INSTALLER} == 'host' ]; then
+          echo "Run laravel installer on host: laravel new ${1}"
+          laravel new sites/${1}
+        fi
+    else
+
+    which laravel >/dev/null 2>&1
+
+        if [ $? -eq 0 ]; then
+              laravel new sites/${1}
+
+              #for windows 10
+              cat /c/Windows/System32/drivers/etc/hosts|grep "127.0.0.1 ${2}.test"
+              if [ $? -eq 1 ]; then
+              echo "127.0.0.1 ${2}.test" >> /c/Windows/System32/drivers/etc/hosts  
+              fi
+
+            else
+             echo "Please install laravel installer from gitbash on Windows 10"
+             echo "or you can manually run laravel installer in the php container and create database by yourself."
+             exit
+        fi
+    fi
+}
+
+
+#create --host
+if [ "$#" -eq 2 ]; then
+
+    if [ "${1}" = "--db" ]; then
+        is_running
+        MYSQL_ROOT_PASSWORD=`${winpty} docker-compose -f docker-compose.yml exec db env|grep MYSQL_ROOT_PASSWORD|cut -d= -f2`
+
+        if [ -z "${MYSQL_ROOT_PASSWORD}" ]; then
+            #建立資料庫，如果不存在
+            ${winpty} docker-compose -f docker-compose.yml exec db mysql -e "CREATE DATABASE IF NOT EXISTS \`${2}\`"
+            #建立使用者
+            ${winpty} docker-compose -f docker-compose.yml exec db mysql -e "CREATE USER IF NOT EXISTS \"${2}\""
+            #建立密碼，同使用者名稱
+            #${winpty} docker-compose -f docker-compose.yml exec db mysql -e "SET PASSWORD FOR \`${2}\`=\"${2}\""
+            ${winpty} docker-compose -f docker-compose.yml exec db mysql -e "ALTER USER \"${2}\" IDENTIFIED WITH mysql_native_password BY \"${2}\""
+            #授權
+            ${winpty} docker-compose -f docker-compose.yml exec db mysql -e "GRANT ALL ON \`${2}\`.* TO \"${2}\""
+            #更新container權限
+            ${winpty} docker-compose -f docker-compose.yml exec db mysql -e "FLUSH PRIVILEGES"
+        else
+            #建資料庫
+            ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db sh -c 'mysql -e "CREATE DATABASE IF NOT EXISTS \`'${2}'\`" -uroot -p"$MYSQL_ROOT_PASSWORD"' > /dev/null 2>&1
+            #建立使用者
+            ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db sh -c 'mysql -e "CREATE USER IF NOT EXISTS \"'${2}'\""  -uroot -p"$MYSQL_ROOT_PASSWORD"' > /dev/null 2>&1
+            #設定使用者帳密同Project名稱
+            #${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db sh -c 'mysql -e "SET PASSWORD FOR \`'${2}'\`=\"'${2}'\""  -uroot -p"$MYSQL_ROOT_PASSWORD"' > /dev/null 2>&1
+            ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db sh -c 'mysql -e "ALTER USER \"'${2}'\" IDENTIFIED WITH mysql_native_password BY \"'${2}'\""  -uroot -p"$MYSQL_ROOT_PASSWORD"' > /dev/null 2>&1
+            #授權使用者
+            ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db sh -c 'mysql -e "GRANT ALL ON \`'${2}'\`.* TO \"'${2}'\""  -uroot -p"$MYSQL_ROOT_PASSWORD"' > /dev/null 2>&1
+            #更新container權限
+            ${winpty} docker-compose -f ${base_path}/docker-compose.yml exec db sh -c 'mysql -e "FLUSH PRIVILEGES"  -uroot -p"$MYSQL_ROOT_PASSWORD"' > /dev/null 2>&1
+
+            if [ $? -eq 1 ]; then
+                echo "CREATE DATABASE failed. Please try restart your container."
+                exit;
+            fi
+        fi
+
+        echo "Done."
+        exit;
+    fi
+    if [ "${1}" = "--host" ]; then
+            
+            if [ ${hosts_file} == '/etc/hosts' ]; then
+                sudo cat /etc/hosts|tr -s " "|grep "127.0.0.1 ${2}.test"
+                #找不到時，就新增至Hosts
+                if [ $? -eq 1 ]; then
+                echo "127.0.0.1 ${2}.test" |sudo tee -a /etc/hosts
+                fi
+                else
+
+                #for windows 10
+                cat /c/Windows/System32/drivers/etc/hosts|grep "127.0.0.1 ${2}.test"
+                if [ $? -eq 1 ]; then
+                echo "127.0.0.1 ${2}.test" >> /c/Windows/System32/drivers/etc/hosts  
+                fi
+            fi
+
+            docker ps |grep -q ${containerName}_php_1
+            if [ $? -eq 0 ]; then
+                source ./scripts/nginx-reload
+            fi
+        echo "To manually create new empty project:"
+        echo "mkdir -p sites/${2}/public;touch sites/${2}/public/index.php"
+        exit
+    fi
+fi
+
+#資料夾不能有 . 
+if [[ "${1}" =~ [\.] ]]; then
+    echo "Can't have dot in Project name."
+    exit;
+fi
+
+#檢測目錄是否已存在
+if [ -e "sites/${1}" ]; then
+    echo "The sites/${1} folder exists"
+    exit
+fi
+
+#檢測是否執行
+is_running
+
+#依版本安裝
+if [ "$#" -eq 2 ]; then
+${winpty} docker-compose exec -u dlaravel php /usr/local/bin/composer create-project laravel/laravel=${2} ${1} --prefer-dist
+dlaravelconfig ${1}
+exit;
+fi
+
+#install new laravel project
+dlaravel_new ${1}
+
+dlaravelconfig ${1}
