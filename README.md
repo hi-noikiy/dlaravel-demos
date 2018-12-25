@@ -78,7 +78,7 @@ polymer init
 polymer build
 ```
 
-通常我们会通过 ` php -S localhost:7600 -t public ` 来运行 Nginx 上的 laravel 项目.
+通常我们会通过 ` php -S localhost:7600 -t public ` 来运行 Web 服务器上的 laravel 项目.
 
 同理, 这里将 build 生成的 unbundled 文件夹 软链接到 public 目录下. 
 
